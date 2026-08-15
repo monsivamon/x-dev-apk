@@ -4,7 +4,7 @@ import subprocess
 from apkmirror import Version
 from utils import patch_apk
 
-# CLIのlist-patches出力を解析してパッチメタデータを構築する
+# Morphe CLIからパッチメタデータを抽出する
 def extract_patches_metadata(cli_path: str, mpp_path: str) -> list:
     print(f"  -> Extracting patch list dynamically from {mpp_path} via CLI...")
 
@@ -63,7 +63,7 @@ def extract_patches_metadata(cli_path: str, mpp_path: str) -> list:
 
     return patches
 
-# 指定バージョンと互換性のあるパッチ名のリストを返す
+# 指定バージョンに互換性のあるパッチ名を取得する
 def get_patches_for_version(patches_list: list, package_name: str, target_version: str) -> list:
     patches = []
     for patch in patches_list:
@@ -90,8 +90,8 @@ def get_patches_for_version(patches_list: list, package_name: str, target_versio
 
     return patches
 
-# Twitter互換パッチを抽出して重複を除く
-def get_xdev_patches(cli: str, patches: str, target_version: str) -> list[str]:
+# Twitter互換の全パッチリストを動的に抽出する（devブランチ用）
+def get_dev_patches(cli: str, patches: str, target_version: str) -> list[str]:
     patches_list = extract_patches_metadata(cli, patches)
 
     includes = get_patches_for_version(
@@ -100,30 +100,33 @@ def get_xdev_patches(cli: str, patches: str, target_version: str) -> list[str]:
         target_version,
     )
 
-    # デバッグ出力
     print("===== Extracted Twitter patches =====")
     print(includes)
 
     if not includes:
         raise RuntimeError("Morphe returned no dev patches")
 
-    # 重複を除く
     return list(dict.fromkeys(includes))
 
-# 抽出したパッチを全て適用してAPKをビルドする
-def build_apks(latest_version: Version, apk: str, piko_commit: str) -> list[str]:
+# APKに対して全パッチを適用し、パッチリストと成否辞書を返す
+def build_apks(
+    latest_version: Version,
+    apk: str,
+    piko_commit: str,
+) -> tuple[list[str], dict[str, bool]]:
     patches = "bins/patches.mpp"
     cli = "bins/morphe-cli.jar"
-    includes = get_xdev_patches(cli, patches, latest_version.version)
 
-    patch_apk(
+    includes = get_dev_patches(cli, patches, latest_version.version)
+
+    patch_statuses = patch_apk(
         cli,
         patches,
         apk,
         includes=includes,
         excludes=[],
         out=f"piko-dev-v{latest_version.version}-{piko_commit[:7]}.apk",
-        minimum_patches=len(includes),
+        continue_on_error=True,
     )
 
-    return includes
+    return includes, patch_statuses
