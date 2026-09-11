@@ -151,8 +151,13 @@ def main():
     versions = apkmirror.get_versions(
         "https://www.apkmirror.com/apk/x-corp/twitter/"
     )
+    print("===== APKMirror versions =====")
+    print([v.version for v in versions])
 
     piko_build = build_piko_patches()
+    print("===== Piko supported versions =====")
+    print(sorted(piko_build.supported_versions))
+
     latest_version = get_latest_version(versions, piko_build.supported_versions)
     if latest_version is None:
         raise Exception("No X version is supported by the Piko dev patches")
