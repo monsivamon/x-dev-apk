@@ -4,15 +4,21 @@ import subprocess
 from apkmirror import Version
 from utils import patch_apk
 
-# Morphe CLIからパッチメタデータを抽出する
+
+# Print a prefixed progress message for the APK stage
+def log(message: str):
+    print(f"[apk] {message}", flush=True)
+
+
+# Extract patch metadata from a .mpp via the Morphe CLI
 def extract_patches_metadata(cli_path: str, mpp_path: str) -> list:
-    print(f"  -> Extracting patch list dynamically from {mpp_path} via CLI...")
+    log(f"Extracting patch list from {mpp_path} via CLI...")
 
     cmd = [
         "java", "-jar", cli_path,
         "list-patches",
         f"--patches={mpp_path}",
-        "-p", "-v"
+        "-p", "-v",
     ]
 
     try:
@@ -33,23 +39,23 @@ def extract_patches_metadata(cli_path: str, mpp_path: str) -> list:
         if not s_line:
             continue
 
-        if s_line.startswith('Index:'):
+        if s_line.startswith("Index:"):
             current_patch = {"name": "", "compatiblePackages": []}
             patches.append(current_patch)
             current_package = None
             in_versions = False
 
-        elif s_line.startswith('Name:') and current_patch is not None:
+        elif s_line.startswith("Name:") and current_patch is not None:
             current_patch["name"] = s_line[5:].strip()
 
-        elif s_line.startswith('Package name:'):
-            pkg_name = s_line.split('Package name:', 1)[1].strip()
+        elif s_line.startswith("Package name:"):
+            pkg_name = s_line.split("Package name:", 1)[1].strip()
             current_package = {"name": pkg_name, "versions": []}
             if current_patch is not None:
                 current_patch["compatiblePackages"].append(current_package)
             in_versions = False
 
-        elif s_line.startswith('Compatible versions:'):
+        elif s_line.startswith("Compatible versions:"):
             in_versions = True
 
         elif in_versions and current_package is not None:
@@ -63,7 +69,8 @@ def extract_patches_metadata(cli_path: str, mpp_path: str) -> list:
 
     return patches
 
-# 指定バージョンに互換性のあるパッチ名を取得する
+
+# Return patch names compatible with the given version
 def get_patches_for_version(patches_list: list, package_name: str, target_version: str) -> list:
     patches = []
     for patch in patches_list:
@@ -90,34 +97,40 @@ def get_patches_for_version(patches_list: list, package_name: str, target_versio
 
     return patches
 
-# Twitter互換の全パッチリストを動的に抽出する（devブランチ用）
+
+# Extract the full Twitter patch list for the target version (dev branch)
 def get_dev_patches(cli: str, patches: str, target_version: str) -> list[str]:
     patches_list = extract_patches_metadata(cli, patches)
-
     includes = get_patches_for_version(
-        patches_list,
-        "com.twitter.android",
-        target_version,
+        patches_list, "com.twitter.android", target_version
     )
-
-    print("===== Extracted Twitter patches =====")
-    print(includes)
-
+    log(f"Found {len(includes)} dev patches for {target_version}")
     if not includes:
-        raise RuntimeError("Morphe returned no dev patches")
-
+        raise RuntimeError("Morphe returned no dev patches for the target version")
     return list(dict.fromkeys(includes))
 
-# APKに対して全パッチを適用し、パッチリストと成否辞書を返す
+
+# Extract every patch name from a .mpp (no version filter).
+# Used for NEW marking against the previous release.
+def get_all_patch_names(cli: str, patches: str) -> list[str]:
+    patches_list = extract_patches_metadata(cli, patches)
+    names = [p["name"] for p in patches_list if p.get("name")]
+    return list(dict.fromkeys(names))
+
+
+# Apply patches to the APK and return patch names and statuses
 def build_apks(
     latest_version: Version,
     apk: str,
     piko_commit: str,
+    includes: list[str],
+    suffix: str = "",
 ) -> tuple[list[str], dict[str, bool]]:
     patches = "bins/patches.mpp"
     cli = "bins/morphe-cli.jar"
 
-    includes = get_dev_patches(cli, patches, latest_version.version)
+    out_apk = f"piko-dev-v{latest_version.version}-{piko_commit[:7]}{suffix}.apk"
+    log(f"Patching {apk} -> {out_apk} (may take 5-10 minutes)...")
 
     patch_statuses = patch_apk(
         cli,
@@ -125,8 +138,12 @@ def build_apks(
         apk,
         includes=includes,
         excludes=[],
-        out=f"piko-dev-v{latest_version.version}-{piko_commit[:7]}.apk",
+        out=out_apk,
         continue_on_error=True,
     )
+
+    succeeded = sum(1 for v in patch_statuses.values() if v)
+    failed = len(patch_statuses) - succeeded
+    log(f"Patching complete: {succeeded} succeeded, {failed} failed")
 
     return includes, patch_statuses
