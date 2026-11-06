@@ -7,7 +7,8 @@ import requests
 
 _scraper = None
 
-# GitHub APIリクエスト用のヘッダーを生成する
+
+# Build headers for GitHub API requests, adding auth if available
 def github_api_headers() -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
@@ -18,7 +19,8 @@ def github_api_headers() -> dict[str, str]:
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
-# cloudscraperのシングルトンインスタンスを取得する
+
+# Return the singleton cloudscraper session instance
 def get_scraper():
     global _scraper
     if _scraper is None:
@@ -29,12 +31,14 @@ def get_scraper():
         })
     return _scraper
 
-# エラーメッセージを出力して終了する
+
+# Print an error message to stderr and exit with code 1
 def panic(message: str):
     print(message, file=sys.stderr)
     exit(1)
 
-# ファイルをダウンロードして保存する
+
+# Download a file from link to out, optionally via cloudscraper
 def download(link, out, headers=None, use_scraper=False):
     dir_name = os.path.dirname(out)
     if dir_name:
@@ -45,18 +49,19 @@ def download(link, out, headers=None, use_scraper=False):
         return
 
     if use_scraper:
-        print(f"Downloading with scraper: {link}")
+        print(f"Downloading with scraper: {link}", flush=True)
 
     session = get_scraper() if use_scraper else requests
 
-    with session.get(link, stream=True, headers=headers) as r:
+    with session.get(link, stream=True, headers=headers, timeout=30) as r:
         r.raise_for_status()
         with open(out, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
 
-# シェルコマンドを実行し、失敗時は終了する
+
+# Run a shell command and exit on failure
 def run_command(command: list[str]):
     cmd = subprocess.run(command, capture_output=True, shell=True)
 
@@ -67,7 +72,8 @@ def run_command(command: list[str]):
         print(cmd.stderr)
         exit(1)
 
-# Morphe CLIでAPKにパッチを適用し、パッチごとの成否を返す
+
+# Apply patches via Morphe CLI and return per-patch success status
 def patch_apk(
     cli: str,
     patches: str,
@@ -115,13 +121,13 @@ def patch_apk(
     if out is not None:
         command.extend(["--out", out])
 
-    command.append(apk)
+    command.append(os.path.abspath(apk))
 
     result = subprocess.run(command, text=True, capture_output=True)
-    print(result.stdout, end="")
-    print(result.stderr, end="", file=sys.stderr)
+    print(result.stdout, end="", flush=True)
+    print(result.stderr, end="", file=sys.stderr, flush=True)
 
-    if not continue_on_error:
+    if result.returncode != 0:
         result.check_returncode()
 
     output = result.stdout + result.stderr
@@ -130,9 +136,9 @@ def patch_apk(
     if includes:
         failed = set(
             re.findall(
-                r"SEVERE: FAILED:\s*(.+)",
+                r"FAILED:\s*(.+?)\s*$",
                 output,
-                re.MULTILINE,
+                re.MULTILINE | re.IGNORECASE,
             )
         )
         for patch_name in includes:
@@ -143,13 +149,23 @@ def patch_apk(
 
     return statuses
 
-# GitHub CLIでリリースを作成しアセットをアップロードする
-def publish_release(tag: str, files: list[str], message: str, title = ""):
+
+# Create a GitHub release via gh CLI and upload assets
+def publish_release(tag: str, files: list[str], message: str, title=""):
     key = os.environ.get("GITHUB_TOKEN")
     if key is None:
         raise Exception("GITHUB_TOKEN is not set")
 
-    command = ["gh", "release", "create", "--latest", tag, "--notes", message, "--title", title]
+    # Anything that is not the default branch becomes a prerelease.
+    ref = os.environ.get("GITHUB_REF", "")
+    is_release = ref in ("", "refs/heads/master", "refs/heads/main")
+
+    command = ["gh", "release", "create", tag, "--notes", message, "--title", title]
+    if is_release:
+        command.append("--latest")
+    else:
+        command.append("--prerelease")
+        print(f"Non-default ref ({ref}) -> creating prerelease")
 
     if len(files) == 0:
         raise Exception("Files should have atleast one item")

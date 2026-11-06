@@ -2,3 +2,5 @@
 __pycache__
 test.py
 .direnv
+all_sources.bat
+all_sources.txt
