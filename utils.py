@@ -20,15 +20,56 @@ def github_api_headers() -> dict[str, str]:
     return headers
 
 
-# Return the singleton cloudscraper session instance
+# Cloudflare のチャレンジページ（HTTP 200 で返ってくる）かどうかを判定する
+def _is_challenge_page(res) -> bool:
+    if res is None or getattr(res, "status_code", None) != 200:
+        return False
+    try:
+        text = (res.text or "")[:5000]
+    except Exception:
+        return False
+    markers = (
+        "Just a moment", "cf-chl-", "__cf_chl_", "Checking your browser",
+        "Attention Required", "challenge-platform", "cf_chl_opt",
+    )
+    return any(m in text for m in markers)
+
+# CloudflareのBot検知を回避するためのスクレイパーを取得する
+class _HybridSession:
+    def __init__(self) -> None:
+        import cloudscraper
+        try:
+            self._primary = cloudscraper.create_scraper(enable_stealth=True)
+        except TypeError:
+            self._primary = cloudscraper.create_scraper()
+        self._primary.headers.update({"User-Agent": "APKUpdater-v3.0.3"})
+        self._fallback = None
+        self.headers = self._primary.headers
+        print("[scraper] primary: cloudscraper (stealth + APKUpdater UA)", flush=True)
+
+    def _get_fallback(self):
+        if self._fallback is None:
+            from curl_cffi import requests as curl_requests
+            self._fallback = curl_requests.Session(impersonate="chrome124")
+            print("[scraper] fallback: curl_cffi (Chrome 124 full impersonation)", flush=True)
+        return self._fallback
+
+    def get(self, *args, **kwargs):
+        r = self._primary.get(*args, **kwargs)
+        # 403 または チャレンジページが返ってきた場合は fallback に切り替え
+        if r.status_code == 403 or _is_challenge_page(r):
+            reason = "403" if r.status_code == 403 else "challenge page"
+            try: r.close()
+            except Exception: pass
+            print(f"[scraper] primary returned {reason}, retrying with curl_cffi...", flush=True)
+            r = self._get_fallback().get(*args, **kwargs)
+        return r
+
+# Return the singleton hybrid scraper instance
 def get_scraper():
     global _scraper
     if _scraper is None:
-        import cloudscraper
-        _scraper = cloudscraper.create_scraper()
-        _scraper.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-        })
+        _scraper = _HybridSession()
     return _scraper
 
 
