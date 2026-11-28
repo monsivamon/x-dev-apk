@@ -1,19 +1,17 @@
 from dataclasses import dataclass
 import re
 from typing import cast
+from urllib.parse import urlparse
 from bs4 import BeautifulSoup, Tag
-from utils import download, get_scraper
+from utils import download, get_scraper, resolve_apk_via_translate
 
 
-# Holds an APK version string and its detail page URL
 @dataclass
 class Version:
     version: str
     link: str
 
 
-# Holds APK variant info: bundle flag, download link, architecture,
-# parsed minimum Android version, its raw display text, and screen DPI text
 @dataclass
 class Variant:
     is_bundle: bool
@@ -24,14 +22,12 @@ class Variant:
     dpi_text: str = ""
 
 
-# Holds app name and link (currently unused placeholder)
 @dataclass
 class App:
     name: str
     link: str
 
 
-# Raised when a target element is not found during scraping
 class FailedToFindElement(Exception):
     def __init__(self, message=None) -> None:
         self.message = (
@@ -40,15 +36,12 @@ class FailedToFindElement(Exception):
         super().__init__(self.message)
 
 
-# Raised when page fetching fails
 class FailedToFetch(Exception):
     def __init__(self, url=None) -> None:
         self.message = f"Failed to fetch{' ' + url if url is not None else ''}"
         super().__init__(self.message)
 
 
-# Parse 'Android 12L+' / 'Android 9.0+' / 'Android 10+' into (major, minor).
-# Unknown or 'Varies with device' -> (999, 0) so it sorts last.
 def parse_min_android(text: str | None) -> tuple[int, int]:
     if not text:
         return (999, 0)
@@ -62,7 +55,6 @@ def parse_min_android(text: str | None) -> tuple[int, int]:
     return (major, minor)
 
 
-# Extract version list from the given APKMirror page
 def get_versions(url: str) -> list[Version]:
     response = get_scraper().get(url)
     if response.status_code != 200:
@@ -75,7 +67,6 @@ def get_versions(url: str) -> list[Version]:
     if versions is not None:
         for versionRow in cast(Tag, versions).findChildren("div", recursive=False)[1:]:
             if versionRow is None:
-                print(f"{versionRow} is None")
                 continue
 
             version = versionRow.find("span", {"class": "infoSlide-value"})
@@ -89,7 +80,11 @@ def get_versions(url: str) -> list[Version]:
     return out
 
 
-# Follow download link from variant page and save APK file
+def _is_apkmirror_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host == "apkmirror.com" or host.endswith(".apkmirror.com")
+
+
 def download_apk(variant: Variant, path: str = "big_file.apkm"):
     url = variant.link
 
@@ -108,30 +103,77 @@ def download_apk(variant: Variant, path: str = "big_file.apkm"):
     )
 
     download_page = get_scraper().get(download_page_link)
-    # NOTE: the original dev code checked `response.status_code` here by
-    # mistake; that meant a broken download page could slip through.
     if download_page.status_code != 200:
         raise FailedToFetch(download_page_link)
 
     download_page_body = BeautifulSoup(download_page.content, "html.parser")
 
-    direct_link = download_page_body.find("a", {"rel": "nofollow"})
+    nofollow_links = download_page_body.find_all("a", {"rel": "nofollow"})
+    direct_link = next(
+        (link for link in nofollow_links if "download.php" in (link.get("href") or "")),
+        nofollow_links[0] if nofollow_links else None,
+    )
     if direct_link is None:
         raise FailedToFindElement("download link")
 
     direct_link_href = cast(Tag, direct_link).attrs["href"]
-    direct_link_url = f"https://www.apkmirror.com/{direct_link_href}"
-    print(f"Direct link: {direct_link_url}")
+    if direct_link_href.startswith("http://") or direct_link_href.startswith("https://"):
+        direct_link_url = direct_link_href
+    else:
+        direct_link_url = f"https://www.apkmirror.com/{direct_link_href.lstrip('/')}"
+    print(f"Direct link: {direct_link_url}", flush=True)
 
-    download(
+    response = get_scraper().get(
         direct_link_url,
-        path,
-        use_scraper=True,
         headers={"Referer": download_page_link},
+        allow_redirects=False,
+        stream=True,
     )
+    location = response.headers.get("Location") or response.headers.get("location")
+
+    if response.status_code in (301, 302, 303, 307, 308) and location:
+        try:
+            response.close()
+        except Exception:
+            pass
+        if _is_apkmirror_url(location):
+            download(location, path, headers={"Referer": direct_link_url}, use_scraper=True)
+        else:
+            print("  -> APK is served from CDN, downloading directly", flush=True)
+            download(location, path, headers={"Referer": direct_link_url}, use_scraper=False)
+    elif response.status_code == 200 and "text/html" not in (
+        response.headers.get("Content-Type") or ""
+    ).lower():
+        print("  -> Saving APK from direct response", flush=True)
+        with open(path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=65536):
+                if chunk:
+                    f.write(chunk)
+        try:
+            response.close()
+        except Exception:
+            pass
+    else:
+        print(f"  -> HTTP {response.status_code}; resolving CDN URL via relay...", flush=True)
+        try:
+            response.close()
+        except Exception:
+            pass
+        location = resolve_apk_via_translate(direct_link_url)
+        if not location:
+            print("  -> relay could not resolve; trying headless browser...", flush=True)
+            try:
+                from browser import get_browser
+                location = get_browser().resolve_redirect(direct_link_url)
+            except Exception as e:
+                print(f"  -> browser fallback failed: {type(e).__name__}: {e}", flush=True)
+                location = None
+        if not location:
+            raise RuntimeError(f"HTTP Error {response.status_code} for URL: {direct_link_url}")
+        print("  -> APK is served from CDN, downloading directly", flush=True)
+        download(location, path, headers={"Referer": direct_link_url}, use_scraper=False)
 
 
-# Fetch available variants from the version-specific page
 def get_variants(version: Version) -> list[Variant]:
     url = version.link
     variants_page = get_scraper().get(url)
@@ -154,14 +196,11 @@ def get_variants(version: Version) -> list[Variant]:
             "div", {"class": "table-cell"}, recursive=False
         )
         if len(cells) < 3:
-            print("Could not find enough cells")
             continue
 
         is_bundle_tag = variant_row.find("span", {"class": "apkm-badge"})
         is_bundle = False
-        if is_bundle_tag is None or is_bundle_tag.string is None:
-            print("Failed to find apk-badge")
-        else:
+        if is_bundle_tag is not None and is_bundle_tag.string is not None:
             is_bundle = is_bundle_tag.string.strip() == "BUNDLE"
 
         architecture: str = cells[1].get_text(strip=True)
@@ -171,7 +210,6 @@ def get_variants(version: Version) -> list[Variant]:
 
         link_element = variant_row.find("a", {"class": "accent_color"})
         if link_element is None:
-            print("Failed to find the link element")
             continue
 
         link: str = f"https://www.apkmirror.com{link_element.attrs['href']}"
@@ -186,5 +224,4 @@ def get_variants(version: Version) -> list[Variant]:
             )
         )
 
-    print(variants)
     return variants

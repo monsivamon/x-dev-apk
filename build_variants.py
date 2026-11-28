@@ -1,16 +1,16 @@
-import re
 import subprocess
 
 from apkmirror import Version
 from utils import patch_apk
 
+# Patches requiring mandatory custom options that fail without user input
+EXCLUDED_PATCHES = set()
 
-# Print a prefixed progress message for the APK stage
+
 def log(message: str):
     print(f"[apk] {message}", flush=True)
 
 
-# Extract patch metadata from a .mpp via the Morphe CLI
 def extract_patches_metadata(cli_path: str, mpp_path: str) -> list:
     log(f"Extracting patch list from {mpp_path} via CLI...")
 
@@ -70,55 +70,85 @@ def extract_patches_metadata(cli_path: str, mpp_path: str) -> list:
     return patches
 
 
-# Return patch names compatible with the given version
-def get_patches_for_version(patches_list: list, package_name: str, target_version: str) -> list:
-    patches = []
-    for patch in patches_list:
-        patch_name = patch.get("name")
-        compat = patch.get("compatiblePackages")
+# Extract all compatible com.twitter.android versions grouped by category from Morphe CLI output
+def get_versions_from_mpp_cli(
+    cli_path: str,
+    mpp_path: str,
+    patch_categories: dict[str, str | None],
+) -> tuple[set[str], set[str]]:
+    cli_patches = extract_patches_metadata(cli_path, mpp_path)
+    old_vers: set[str] = set()
+    new_vers: set[str] = set()
 
-        supports_version = False
-        if not compat:
-            supports_version = True
-        elif isinstance(compat, dict) and package_name in compat:
-            versions = compat[package_name]
-            if not versions or target_version in versions:
-                supports_version = True
-        elif isinstance(compat, list):
-            for pkg in compat:
-                if isinstance(pkg, dict) and pkg.get("name") == package_name:
-                    versions = pkg.get("versions", [])
-                    if not versions or target_version in versions:
-                        supports_version = True
-                    break
+    for p in cli_patches:
+        name = p.get("name")
+        if not name:
+            continue
+        cat = patch_categories.get(name)
+        for pkg in p.get("compatiblePackages") or []:
+            if isinstance(pkg, dict) and pkg.get("name") == "com.twitter.android":
+                for v in pkg.get("versions") or []:
+                    if cat == "Old patches":
+                        old_vers.add(v)
+                    elif cat == "NewX patches":
+                        new_vers.add(v)
+                    else:
+                        if v.startswith("12.9.1"):
+                            old_vers.add(v)
+                        else:
+                            new_vers.add(v)
 
-        if supports_version and patch_name:
-            patches.append(patch_name)
-
-    return patches
+    return old_vers, new_vers
 
 
-# Extract the full Twitter patch list for the target version (dev branch)
-def get_dev_patches(cli: str, patches: str, target_version: str) -> list[str]:
-    patches_list = extract_patches_metadata(cli, patches)
-    includes = get_patches_for_version(
-        patches_list, "com.twitter.android", target_version
+def get_patches_by_category(
+    cli: str,
+    patches_mpp: str,
+    patch_categories: dict[str, str | None],
+    is_old_x: bool,
+) -> list[str]:
+    target_category = "Old patches" if is_old_x else "NewX patches"
+    excluded_category = "NewX patches" if is_old_x else "Old patches"
+
+    cli_patches = extract_patches_metadata(cli, patches_mpp)
+    selected: list[str] = []
+
+    for p in cli_patches:
+        name = p.get("name")
+        if not name or name in EXCLUDED_PATCHES:
+            continue
+
+        compat = p.get("compatiblePackages") or []
+        is_twitter_or_universal = (not compat) or any(
+            isinstance(pkg, dict) and pkg.get("name") == "com.twitter.android"
+            for pkg in compat
+        )
+        if not is_twitter_or_universal:
+            continue
+
+        cat = patch_categories.get(name)
+        if cat == target_category:
+            selected.append(name)
+        elif cat != excluded_category:
+            selected.append(name)
+
+    result = list(dict.fromkeys(selected))
+    log(
+        f"Selected {len(result)} patches for "
+        f"{'Old X (12.9.1)' if is_old_x else 'New X'} "
+        f"(category='{target_category}' + common)"
     )
-    log(f"Found {len(includes)} dev patches for {target_version}")
-    if not includes:
-        raise RuntimeError("Morphe returned no dev patches for the target version")
-    return list(dict.fromkeys(includes))
+    if not result:
+        raise RuntimeError(f"No patches found for category '{target_category}'")
+    return result
 
 
-# Extract every patch name from a .mpp (no version filter).
-# Used for NEW marking against the previous release.
 def get_all_patch_names(cli: str, patches: str) -> list[str]:
     patches_list = extract_patches_metadata(cli, patches)
     names = [p["name"] for p in patches_list if p.get("name")]
     return list(dict.fromkeys(names))
 
 
-# Apply patches to the APK and return patch names and statuses
 def build_apks(
     latest_version: Version,
     apk: str,
@@ -137,7 +167,7 @@ def build_apks(
         patches,
         apk,
         includes=includes,
-        excludes=[],
+        excludes=list(EXCLUDED_PATCHES),
         out=out_apk,
         continue_on_error=True,
     )

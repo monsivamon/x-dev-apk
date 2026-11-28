@@ -5,7 +5,6 @@ import requests
 from utils import download, github_api_headers
 
 
-# Download the first GitHub release asset matching the given regex
 def download_release_asset(
     repo: str,
     regex: str,
@@ -63,9 +62,18 @@ def download_release_asset(
     return latest_release
 
 
-# Download the morphe-cli jar from its GitHub releases
+def download_apkeditor():
+    print("Downloading APKEditor...", flush=True)
+    download_release_asset(
+        "REAndroid/APKEditor",
+        r"APKEditor.*\.jar$",
+        "bins",
+        "apkeditor.jar",
+    )
+
+
 def download_morphe_cli(include_prereleases: bool = False):
-    print("Downloading morphe cli")
+    print("Downloading morphe cli...", flush=True)
     download_release_asset(
         "MorpheApp/morphe-desktop",
         r"^morphe-desktop-.*-all\.jar$",

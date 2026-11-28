@@ -31,11 +31,14 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen
+        run: |
+          uv sync
+          uv run python -m playwright install chromium || true
 
       - name: Try building
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APKMIRROR_PROXY: ${{ secrets.APKMIRROR_PROXY }}
           GRADLE_OPTS: -Dorg.gradle.caching=true
         run: |
           mkdir -p bins

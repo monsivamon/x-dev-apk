@@ -1,7 +1,7 @@
 [project]
 name = "twitter-apk"
 version = "0.1.0"
-description = "Builds patched X APKs using Piko dev patches"
+description = "Builds patched X APKs (Old 12.9.1 & New X) using Piko dev patches"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -9,4 +9,5 @@ dependencies = [
     "requests>=2.32.3",
     "cloudscraper>=1.2.71",
     "curl_cffi>=0.7.0",
+    "playwright>=1.49.0",
 ]
