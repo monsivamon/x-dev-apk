@@ -1,6 +1,6 @@
 # 🛠️ X DEV APK ✨
 
-Builds patched Twitter/X APKs using [Piko](https://github.com/crimera/piko) patches from the `dev` branch.
+Builds patched Twitter/X APKs using [Piko](https://github.com/crimera/piko) patches compiled directly from the `dev` branch.
 
 **⏰ Runs automatically every day at 17:00 JST.**
 
@@ -8,12 +8,13 @@ Builds patched Twitter/X APKs using [Piko](https://github.com/crimera/piko) patc
 
 ## 🚀 Features
 
-- 📱 Publishes up to **2 APK variants** per release (arm64 bundle, lowest Android requirement first).
-- 🛟 **Per-variant fallback**: a failed download or patch on one variant does not block the other.
-- ✅ If a patch fails, the build continues with `--continue-on-error` instead of stopping.
-- 📊 Per-patch success/failure is written to `patches-applied.txt`, split into one section per variant.
-- 🔎 Falls back to direct slug URLs when the target version is not listed on the APKMirror top page.
-- 🚫 Skips `alpha` / `beta` X versions; only stable `prod` / `release` builds are used.
+- 📱 **Dual-Track Release (New X & Old X)**: Automatically builds both the latest **New X** track (`NewX patches`) and the legacy UI **Old X** track (`Old patches`) in a single release (`-dual`).
+- 🧩 **Category-Aware Full Patching**: Dynamically extracts patch categories (`NewX patches` / `Old patches` + common patches) from the compiled Piko bundle and force-applies all matching patches.
+- 🔧 **Clean Bundle Merging via APKEditor**: Merges split APK bundles (`.apkm`) with `APKEditor` prior to patching with Morphe CLI for maximum patch compatibility.
+- 🛟 **Per-Track Fallback & Continue-on-Error**: A failed download or patch on one track does not block the other, and individual patch failures are bypassed via `--continue-on-error`.
+- 📊 **Detailed Patch Report**: Writes per-track patch results (`Success` / `Failure`) to `patches-applied.txt` and marks newly added patches with `**NEW**`.
+- 🛡️ **Multi-Stage Cloudflare Bypass & Slug Fallback**: Resolves APKMirror downloads via `curl_cffi`, `cloudscraper`, Google Translate relay / R2 direct CDN resolution, and headless Chromium fallback, plus direct slug URL probing.
+- 🚫 **Stable Base APKs Only**: Skips `alpha` / `beta` X versions and targets stable `prod` / `release` builds.
 
 ## 📦 Release Assets
 
@@ -21,27 +22,29 @@ Every release includes:
 
 | Asset | Description |
 |---|---|
-| `piko-dev-v{version}-{commit}-{slug}.apk` | Patched APK for a specific minimum Android version (e.g. `android-12Lplus.apk`, `android-9.0plus.apk`). One per successfully built variant. |
-| `patches-{commit}.mpp` | Piko patch bundle used for the build. |
-| `patches-applied.txt` | Per-variant sections listing applied patches with `Success` / `Failure`; new patches marked with `**NEW**`. |
+| `piko-dev-v{version}-{commit}-new-{slug}.apk` | **New X** track — latest supported X version patched with `NewX patches` + common patches. |
+| `piko-dev-v{version}-{commit}-old-{slug}.apk` | **Old X** track — legacy UI X version patched with `Old patches` + common patches. |
+| `patches-{commit}.mpp` | Compiled Piko patch bundle used for the build. |
+| `patches-applied.txt` | Per-track sections listing applied patches with `Success` / `Failure`; new patches marked with `**NEW**`. |
 
 ### Which APK should I install?
 
-| File suffix | Target |
+| File identifier | Target |
 |---|---|
-| `-android-9.0plus.apk` | Broad compatibility (Android 9 and newer), single screen DPI |
-| `-android-12Lplus.apk` | Universal screen DPI (120-640dpi), Android 12L and newer |
+| `-new-` | **New X** — Built on the latest X release (`12.45.x+`) with Piko's `NewX` patch set. |
+| `-old-` | **Old X** — Built on the legacy UI X release (`12.19.x` / `12.9.x`) with Piko's classic `Old` patch set. |
 
-Pick the one whose **Minimum Version** matches your device. If both work, either is fine.
+Both APKs are pre-merged universal / arm64 builds. Pick `-new-` for the newest X features or `-old-` if you prefer the classic X layout and full legacy patch compatibility.
 
 ## ⚠️ Disclaimer
 
-All patches included in this build are under development.  
+All patches included in this build are from the `dev` branch and are under active development.  
 Stable operation is not guaranteed.  
 Unexpected issues may occur. Please use at your own risk.
 
 ## 🙏 Credits
 
-- 🛠️ [morphe](https://github.com/MorpheApp) - patcher
-- 🛠️ [crimera](https://github.com/crimera/piko) - Piko patches
-- 💡 [j-hc](https://github.com/j-hc) - Project is inspired by j-hc's revanced builder template.
+- 🛠️ [MorpheApp](https://github.com/MorpheApp) - Morphe CLI patcher
+- 🛠️ [crimera/piko](https://github.com/crimera/piko) - Piko patches (`dev` branch)
+- 🔧 [REAndroid/APKEditor](https://github.com/REAndroid/APKEditor) - Split APK bundle merger
+- 💡 [j-hc](https://github.com/j-hc) - Inspired by j-hc's revanced builder template
